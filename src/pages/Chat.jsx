@@ -158,23 +158,24 @@
 
         /* ---------------- SEND MESSAGE ---------------- */
         const sendMessage = async () => {
-          if (!text.trim() && !imageUrl.trim()) return;
-          if (!conversationId) return;
+  if (!text.trim() && !imageUrl.trim()) return;
+  if (!conversationId) return;
 
-          await addDoc(
-            collection(db, "conversations", conversationId, "messages"),
-            {
-              senderId: user.uid,
-              text: text || "",
-              imageUrl: imageUrl || "",
-              createdAt: serverTimestamp(),
-              deleted: false,
-            }
-          );
+  await addDoc(
+    collection(db, "conversations", conversationId, "messages"),
+    {
+      senderId: user.uid,
+      text: text || "",
+      imageUrl: imageUrl || "",
+      createdAt: serverTimestamp(),
+      deleted: false,
+    }
+  );
 
-          setText("");
-          setImageUrl("");
-        };
+  setText("");
+  setImageUrl("");
+};
+
 
         /* ---------------- SOFT DELETE ---------------- */
         const softDeleteMessage = async (id) => {
@@ -602,39 +603,59 @@
     </div>
 
 
-  {/* Input */}
+ {/* Input */}
 {activeChat && (
   <div
     style={{
       padding: "12px",
       borderTop: "1px solid #e5e7eb",
       background: darkMode ? "#020617" : "#fff",
-
+      display: "flex",
+      flexDirection: "column",
+      gap: "8px",
     }}
   >
+    {/* IMAGE URL INPUT (DAY 8 FEATURE) */}
+    <input
+      type="text"
+      value={imageUrl}
+      onChange={(e) => setImageUrl(e.target.value)}
+      placeholder="Paste image URL (optional)"
+      style={{
+        width: "100%",
+        height: "38px",
+        padding: "0 12px",
+        fontSize: "13px",
+        borderRadius: "6px",
+        border: darkMode ? "1px solid #374151" : "1px solid #d1d5db",
+        background: darkMode ? "#020617" : "#fff",
+        color: darkMode ? "#f9fafb" : "#000",
+        outline: "none",
+      }}
+    />
+
+    {/* MESSAGE INPUT */}
     <input
       value={text}
       onChange={(e) => setText(e.target.value)}
       placeholder="Type a message..."
       style={{
-        width: "100%",              // ✅ FULL WIDTH
-        height: "44px",             // ✅ NORMAL HEIGHT
+        width: "100%",
+        height: "44px",
         padding: "0 16px",
         fontSize: "14px",
         borderRadius: "8px",
         border: darkMode ? "1px solid #374151" : "1px solid #d1d5db",
         background: darkMode ? "#020617" : "#fff",
         color: darkMode ? "#f9fafb" : "#000",
-
         outline: "none",
-        boxSizing: "border-box",
       }}
     />
 
+    {/* SEND BUTTON */}
     <button
       onClick={sendMessage}
       style={{
-        marginTop: "10px",          // ✅ BUTTON BELOW INPUT
         width: "100%",
         height: "42px",
         background: "#2563eb",
@@ -649,6 +670,7 @@
     </button>
   </div>
 )}
+
 
 
 
