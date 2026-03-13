@@ -1,683 +1,831 @@
-      import { useEffect, useState, useRef } from "react";
-      import { signOut } from "firebase/auth";
+import { useEffect, useRef, useState } from "react";
+import { signOut } from "firebase/auth";
+import {
+  addDoc,
+  collection,
+  doc,
+  getDocs,
+  limit,
+  onSnapshot,
+  orderBy,
+  query,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
+  where,
+} from "firebase/firestore";
+import { auth, db } from "../services/firebase";
+import { useAuth } from "../context/useAuth";
 
-      import {
-        collection,
-        getDocs,
-        doc,
-        getDoc,
-        setDoc,
-        addDoc,
-        onSnapshot,
-        orderBy,
-        query,
-        serverTimestamp,
-        updateDoc,
-      } from "firebase/firestore";
-      import { auth, db } from "../services/firebase";
-      import { useAuth } from "../context/AuthContext";
+const getConversationId = (uid1, uid2) =>
+  uid1 < uid2 ? `${uid1}_${uid2}` : `${uid2}_${uid1}`;
 
-      /* Helpers */
-      const getConversationId = (uid1, uid2) =>
-        uid1 < uid2 ? `${uid1}_${uid2}` : `${uid2}_${uid1}`;
+const getInitials = (name = "") =>
+  name
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("") || "?";
 
-      const formatTime = (ts) => {
-        if (!ts?.toDate) return "";
-        const d = ts.toDate();
-        return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      };
+const formatMessageTime = (timestamp) => {
+  if (!timestamp?.toDate) return "";
 
-      const Chat = () => {
-        const { user } = useAuth();
-
-        const [users, setUsers] = useState([]);
-        const [fullName, setFullName] = useState("");
-        const [activeChat, setActiveChat] = useState(null); // user OR group
-        const [messages, setMessages] = useState([]);
-        const [text, setText] = useState("");
-        const [imageUrl, setImageUrl] = useState("");
-        const [conversationId, setConversationId] = useState(null);
-
-        // Group states
-        const [isGroupMode, setIsGroupMode] = useState(false);
-        const [selectedUsers, setSelectedUsers] = useState([]);
-        const [groupName, setGroupName] = useState("");
-
-        const bottomRef = useRef(null);
-        const [addMembersMode, setAddMembersMode] = useState(false);
-        const [newMembers, setNewMembers] = useState([]);
-        const [editingMessageId, setEditingMessageId] = useState(null);
-        const [editText, setEditText] = useState("");
-        const [darkMode, setDarkMode] = useState(false);
-
-
-
-        /* ---------------- USER PROFILE ---------------- */
-        useEffect(() => {
-          if (!user) return;
-
-          getDoc(doc(db, "users", user.uid)).then((snap) => {
-            if (snap.exists()) setFullName(snap.data().fullName);
-          });
-        }, [user]);
-
-        /* ---------------- FETCH USERS ---------------- */
-        useEffect(() => {
-          if (!user) return;
-
-          getDocs(collection(db, "users")).then((snapshot) => {
-            const list = [];
-            snapshot.forEach((d) => {
-              if (d.id !== user.uid) list.push({ id: d.id, ...d.data() });
-            });
-            setUsers(list);
-          });
-        }, [user]);
-
-        /* ---------------- LOAD CONVERSATION ---------------- */
-      useEffect(() => {
-        if (!activeChat || !user) return;
-
-        const convId = activeChat.isGroup
-          ? activeChat.id
-          : getConversationId(user.uid, activeChat.id);
-
-        setConversationId(convId);
-
-        if (!activeChat.isGroup) {
-          setDoc(
-            doc(db, "conversations", convId),
-            {
-              isGroup: false,
-              members: [user.uid, activeChat.id],
-              createdAt: serverTimestamp(),
-            },
-            { merge: true }
-          );
-        }
-
-        const q = query(
-          collection(db, "conversations", convId, "messages"),
-          orderBy("createdAt", "asc")
-        );
-
-        const unsub = onSnapshot(q, (snapshot) => {
-          const msgs = snapshot.docs.map((d) => ({
-            id: d.id,
-            ...d.data(),
-          }));
-          setMessages(msgs);
-        });
-
-        return () => unsub();
-      }, [activeChat]);
-
-
-
-        /* ---------------- AUTO SCROLL ---------------- */
-        useEffect(() => {
-          bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-        }, [messages]);
-
-        /* ---------------- CREATE GROUP ---------------- */
-      const createGroup = async () => {
-        if (!groupName.trim()) {
-          alert("Enter group name");
-          return;
-        }
-
-        if (selectedUsers.length < 2) {
-          alert("Select at least 2 users");
-          return;
-        }
-
-        const groupId = `group_${Date.now()}`;
-        const members = [user.uid, ...selectedUsers.map((u) => u.id)];
-
-        await setDoc(doc(db, "conversations", groupId), {
-          isGroup: true,
-          name: groupName,
-          members,
-          createdAt: serverTimestamp(),
-        });
-
-        setActiveChat({
-          id: groupId,
-          isGroup: true,
-          name: groupName,
-        });
-
-        setConversationId(groupId);
-        setMessages([]);
-
-        setIsGroupMode(false);
-        setSelectedUsers([]);
-        setGroupName("");
-      };
-
-
-        /* ---------------- SEND MESSAGE ---------------- */
-        const sendMessage = async () => {
-  if (!text.trim() && !imageUrl.trim()) return;
-  if (!conversationId) return;
-
-  await addDoc(
-    collection(db, "conversations", conversationId, "messages"),
-    {
-      senderId: user.uid,
-      text: text || "",
-      imageUrl: imageUrl || "",
-      createdAt: serverTimestamp(),
-      deleted: false,
-    }
-  );
-
-  setText("");
-  setImageUrl("");
+  return timestamp.toDate().toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 };
 
+const formatConversationTime = (timestamp) => {
+  if (!timestamp?.toDate) return "";
 
-        /* ---------------- SOFT DELETE ---------------- */
-        const softDeleteMessage = async (id) => {
-          await updateDoc(
-            doc(db, "conversations", conversationId, "messages", id),
-            {
-              text: "",
-              imageUrl: "",
-              deleted: true,
-            }
-          );
-        };
-              /* ---------------- EDIT MESSAGE ---------------- */
-              const startEditMessage = (msg) => {
-                setEditingMessageId(msg.id);
-                setEditText(msg.text);
-              };
+  const date = timestamp.toDate();
+  const now = new Date();
+  const isToday = date.toDateString() === now.toDateString();
 
-              const saveEditedMessage = async () => {
-                if (!editingMessageId || !editText.trim()) return;
+  if (isToday) {
+    return date.toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
 
-                await updateDoc(
-                  doc(db, "conversations", conversationId, "messages", editingMessageId),
-                  {
-                    text: editText,
-                    edited: true,
-                    editedAt: serverTimestamp(),
-                  }
-                );
+  return date.toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+  });
+};
 
-                setEditingMessageId(null);
-                setEditText("");
-              };
+const formatLastSeen = (timestamp) => {
+  if (!timestamp?.toDate) return "Offline";
 
-              const cancelEdit = () => {
-                setEditingMessageId(null);
-                setEditText("");
-              };
+  const date = timestamp.toDate();
+  return `Last seen ${date.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  })}`;
+};
 
-        /* ---------------- ADD MEMBERS TO GROUP ---------------- */
-      const addMembersToGroup = async () => {
-        if (!conversationId || newMembers.length === 0) return;
+const getMessagePreview = (message) => {
+  if (!message) return "No messages yet";
+  if (message.deleted) return "Message deleted";
+  if (message.imageUrl && message.text) return `Photo: ${message.text}`;
+  if (message.imageUrl) return "Photo";
+  return message.text || "No messages yet";
+};
 
-        const groupRef = doc(db, "conversations", conversationId);
-        const snap = await getDoc(groupRef);
+const Chat = () => {
+  const { user } = useAuth();
+  const [profile, setProfile] = useState(null);
+  const [users, setUsers] = useState([]);
+  const [conversations, setConversations] = useState([]);
+  const [activeConversationId, setActiveConversationId] = useState("");
+  const [messages, setMessages] = useState([]);
+  const [text, setText] = useState("");
+  const [imageUrl, setImageUrl] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [isGroupMode, setIsGroupMode] = useState(false);
+  const [selectedUsers, setSelectedUsers] = useState([]);
+  const [groupName, setGroupName] = useState("");
+  const [addMembersMode, setAddMembersMode] = useState(false);
+  const [newMembers, setNewMembers] = useState([]);
+  const [editingMessageId, setEditingMessageId] = useState("");
+  const [editText, setEditText] = useState("");
+  const [darkMode, setDarkMode] = useState(false);
+  const bottomRef = useRef(null);
+  const typingTimeoutRef = useRef(null);
 
-        if (!snap.exists()) return;
+  useEffect(() => {
+    if (!user) return undefined;
 
-        const existingMembers = snap.data().members || [];
+    const profileRef = doc(db, "users", user.uid);
+    const unsubscribe = onSnapshot(profileRef, (snapshot) => {
+      if (snapshot.exists()) {
+        setProfile({ id: snapshot.id, ...snapshot.data() });
+      }
+    });
 
-        const updatedMembers = Array.from(
-          new Set([...existingMembers, ...newMembers])
+    return () => unsubscribe();
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return undefined;
+
+    const usersRef = collection(db, "users");
+    const unsubscribe = onSnapshot(usersRef, (snapshot) => {
+      const nextUsers = snapshot.docs
+        .map((entry) => ({ id: entry.id, ...entry.data() }))
+        .filter((entry) => entry.id !== user.uid)
+        .sort((left, right) =>
+          (left.fullName || "").localeCompare(right.fullName || "")
         );
 
-        await updateDoc(groupRef, {
-          members: updatedMembers,
+      setUsers(nextUsers);
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return undefined;
+
+    const conversationsRef = query(
+      collection(db, "conversations"),
+      where("members", "array-contains", user.uid)
+    );
+
+    const unsubscribe = onSnapshot(conversationsRef, (snapshot) => {
+      const nextConversations = snapshot.docs
+        .map((entry) => ({ id: entry.id, ...entry.data() }))
+        .sort((left, right) => {
+          const leftTime = left.updatedAt?.toMillis?.() || 0;
+          const rightTime = right.updatedAt?.toMillis?.() || 0;
+          return rightTime - leftTime;
         });
 
-        setAddMembersMode(false);
-        setNewMembers([]);
-      };
+      setConversations(nextConversations);
+      setActiveConversationId((currentId) => {
+        if (currentId && nextConversations.some((item) => item.id === currentId)) {
+          return currentId;
+        }
 
+        return nextConversations[0]?.id || "";
+      });
+    });
 
-        /* ---------------- LOGOUT ---------------- */
-        const handleLogout = async () => {
-          await updateDoc(doc(db, "users", user.uid), {
-            online: false,
-            lastSeen: serverTimestamp(),
-          });
-          await signOut(auth);
-        };
+    return () => unsubscribe();
+  }, [user]);
 
-        return (
-          <div
-  style={{
-    display: "flex",
-    height: "100vh",
-    background: darkMode ? "#111827" : "#f9fafb",
-    color: darkMode ? "#f9fafb" : "#000",
-  }}
->
+  useEffect(() => {
+    if (!activeConversationId) return undefined;
 
-            {/* Sidebar */}
-            <div
-  style={{
-    width: 260,
-    background: darkMode ? "#020617" : "#1f2937",
-    color: "#fff",
-    padding: 15,
-  }}
->
+    const messagesRef = query(
+      collection(db, "conversations", activeConversationId, "messages"),
+      orderBy("createdAt", "asc")
+    );
 
-              <h3>Welcome, {fullName}</h3>
-              <button
-  onClick={() => setDarkMode((prev) => !prev)}
-  style={{
-    marginTop: "10px",
-    width: "100%",
-    padding: "6px",
-    background: darkMode ? "#374151" : "#e5e7eb",
-    color: darkMode ? "#fff" : "#000",
-    border: "none",
-    borderRadius: "6px",
-    cursor: "pointer",
-    fontSize: "13px",
-  }}
->
-  {darkMode ? "☀ Light Mode" : "🌙 Dark Mode"}
-</button>
+    const unsubscribe = onSnapshot(messagesRef, (snapshot) => {
+      setMessages(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
+    });
 
+    return () => unsubscribe();
+  }, [activeConversationId]);
 
-              {/* CREATE GROUP UI */}
-              <button
-                onClick={() => setIsGroupMode(!isGroupMode)}
-                style={{ width: "100%", padding: 8, marginBottom: 8 }}
-              >
-                {isGroupMode ? "Cancel Group" : "Create Group"}
-              </button>
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
-              {isGroupMode && (
-                <>
-                  <input
-                    placeholder="Group name"
-                    value={groupName}
-                    onChange={(e) => setGroupName(e.target.value)}
-                    style={{ width: "100%", marginBottom: 6 }}
-                  />
-                  <button onClick={createGroup} style={{ width: "100%" }}>
-                    Create Group
-                  </button>
-                </>
-              )}
+  useEffect(() => {
+    if (!activeConversationId || !user) return undefined;
 
-              <h4 style={{ marginTop: 15 }}>Users</h4>
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
 
-              {users.map((u) => (
-                <div
-                  key={u.id}
-                  onClick={() =>
-                    isGroupMode
-                      ? setSelectedUsers((p) =>
-                          p.some((x) => x.id === u.id)
-                            ? p.filter((x) => x.id !== u.id)
-                            : [...p, u]
-                        )
-                      : setActiveChat({ ...u, isGroup: false })
-                  }
-                  style={{
-                    padding: 8,
-                    marginTop: 6,
-                    background: selectedUsers.some((x) => x.id === u.id)
-                      ? "#374151"
-                      : "#111827",
-                    cursor: "pointer",
-                  }}
-                >
-                  {u.fullName}
-                </div>
-              ))}
+    const conversationRef = doc(db, "conversations", activeConversationId);
+    const isTyping = Boolean(text.trim());
 
-              <button
-                onClick={handleLogout}
-                style={{ marginTop: 20, width: "100%", background: "#ef4444", color: "#fff" }}
-              >
-                Logout
-              </button>
-            </div>
+    updateDoc(conversationRef, {
+      [`typing.${user.uid}`]: isTyping,
+    }).catch(() => {});
 
-            {/* Chat Area */}
-            <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
-              <div
-        style={{
-          padding: "15px",
-          borderBottom: "1px solid #ddd",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-        }}
-      >
-        {activeChat ? (
-          <>
-            <h3>
-              {activeChat.isGroup
-                ? activeChat.name
-                : `Chat with ${activeChat.fullName}`}
-            </h3>
+    if (isTyping) {
+      typingTimeoutRef.current = setTimeout(() => {
+        updateDoc(conversationRef, {
+          [`typing.${user.uid}`]: false,
+        }).catch(() => {});
+      }, 1200);
+    }
 
-            {activeChat.isGroup && (
-              <button
-                onClick={() => setAddMembersMode(!addMembersMode)}
-                style={{
-                  padding: "6px 10px",
-                  background: "#2563eb",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: "4px",
-                  cursor: "pointer",
-                }}
-              >
-                {addMembersMode ? "Cancel" : "Add Members"}
-              </button>
-            )}
-          </>
-        ) : (
-          <h3>Select a chat</h3>
-        )}
-      </div>
-      {addMembersMode && activeChat?.isGroup && (
-        <div
-          style={{
-            padding: "10px",
-            borderBottom: "1px solid #ddd",
-            background: "#f3f4f6",
-          }}
-        >
-          <h4>Add members</h4>
+    return () => {
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+    };
+  }, [activeConversationId, text, user]);
 
-          {users.map((u) => (
-            <label
-              key={u.id}
-              style={{ display: "block", marginBottom: "4px" }}
-            >
-              <input
-                type="checkbox"
-                onChange={(e) =>
-                  setNewMembers((prev) =>
-                    e.target.checked
-                      ? [...prev, u.id]
-                      : prev.filter((id) => id !== u.id)
-                  )
-                }
-              />
-              {" "}{u.fullName}
-            </label>
-          ))}
+  useEffect(() => {
+    return () => {
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+    };
+  }, []);
 
+  const activeConversation =
+    conversations.find((item) => item.id === activeConversationId) || null;
+
+  const availableUsers = users.filter((entry) =>
+    entry.fullName?.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const recentConversations = conversations.filter((conversation) => {
+    const title = getConversationTitle(conversation, users, user?.uid);
+    return title.toLowerCase().includes(searchTerm.toLowerCase());
+  });
+
+  const activeTypingUsers =
+    activeConversation?.members
+      ?.filter((memberId) => memberId !== user?.uid)
+      .filter((memberId) => activeConversation?.typing?.[memberId])
+      .map((memberId) => users.find((entry) => entry.id === memberId)?.fullName)
+      .filter(Boolean) || [];
+
+  const activeUsers = users.filter((entry) => entry.online);
+  const activeConversationUsers =
+    activeConversation?.members
+      ?.filter((memberId) => memberId !== user?.uid)
+      .map((memberId) => users.find((entry) => entry.id === memberId))
+      .filter(Boolean) || [];
+
+  async function createOrOpenDirectConversation(targetUser) {
+    if (!user) return;
+
+    const conversationId = getConversationId(user.uid, targetUser.id);
+    const conversationRef = doc(db, "conversations", conversationId);
+
+    await setDoc(
+      conversationRef,
+      {
+        isGroup: false,
+        members: [user.uid, targetUser.id],
+        directParticipantNames: {
+          [user.uid]: profile?.fullName || user.email || "You",
+          [targetUser.id]: targetUser.fullName,
+        },
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    setActiveConversationId(conversationId);
+    setAddMembersMode(false);
+  }
+
+  async function createGroup() {
+    if (!user) return;
+    if (!groupName.trim()) {
+      alert("Enter a group name.");
+      return;
+    }
+
+    if (selectedUsers.length < 2) {
+      alert("Select at least two people for a group chat.");
+      return;
+    }
+
+    const groupId = `group_${Date.now()}`;
+    const members = [user.uid, ...selectedUsers];
+
+    await setDoc(doc(db, "conversations", groupId), {
+      isGroup: true,
+      name: groupName.trim(),
+      members,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      createdBy: user.uid,
+      typing: {},
+      lastMessage: {
+        text: "Group created",
+        senderName: profile?.fullName || "System",
+      },
+    });
+
+    setGroupName("");
+    setSelectedUsers([]);
+    setIsGroupMode(false);
+    setActiveConversationId(groupId);
+  }
+
+  async function updateConversationPreview(conversationId) {
+    const latestMessageQuery = query(
+      collection(db, "conversations", conversationId, "messages"),
+      orderBy("createdAt", "desc"),
+      limit(1)
+    );
+
+    const snapshot = await getDocs(latestMessageQuery);
+    const latestMessage = snapshot.docs[0]?.data();
+
+    await updateDoc(doc(db, "conversations", conversationId), {
+      lastMessage: latestMessage
+        ? {
+            text: latestMessage.text || "",
+            imageUrl: latestMessage.imageUrl || "",
+            deleted: Boolean(latestMessage.deleted),
+            senderId: latestMessage.senderId,
+            senderName: latestMessage.senderName || "",
+            createdAt: latestMessage.createdAt || serverTimestamp(),
+          }
+        : null,
+      updatedAt: latestMessage?.createdAt || serverTimestamp(),
+    });
+  }
+
+  async function sendMessage() {
+    if (!user || !activeConversationId) return;
+    if (!text.trim() && !imageUrl.trim()) return;
+
+    const payload = {
+      senderId: user.uid,
+      senderName: profile?.fullName || user.email || "Anonymous",
+      text: text.trim(),
+      imageUrl: imageUrl.trim(),
+      createdAt: serverTimestamp(),
+      deleted: false,
+      edited: false,
+    };
+
+    await addDoc(
+      collection(db, "conversations", activeConversationId, "messages"),
+      payload
+    );
+
+    await updateDoc(doc(db, "conversations", activeConversationId), {
+      lastMessage: payload,
+      updatedAt: serverTimestamp(),
+      [`typing.${user.uid}`]: false,
+    });
+
+    setText("");
+    setImageUrl("");
+  }
+
+  async function softDeleteMessage(messageId) {
+    if (!activeConversationId) return;
+
+    await updateDoc(
+      doc(db, "conversations", activeConversationId, "messages", messageId),
+      {
+        text: "",
+        imageUrl: "",
+        deleted: true,
+      }
+    );
+
+    await updateConversationPreview(activeConversationId);
+  }
+
+  function startEditMessage(message) {
+    setEditingMessageId(message.id);
+    setEditText(message.text || "");
+  }
+
+  async function saveEditedMessage() {
+    if (!activeConversationId || !editingMessageId || !editText.trim()) return;
+
+    await updateDoc(
+      doc(db, "conversations", activeConversationId, "messages", editingMessageId),
+      {
+        text: editText.trim(),
+        edited: true,
+        editedAt: serverTimestamp(),
+      }
+    );
+
+    setEditingMessageId("");
+    setEditText("");
+    await updateConversationPreview(activeConversationId);
+  }
+
+  function cancelEdit() {
+    setEditingMessageId("");
+    setEditText("");
+  }
+
+  async function addMembersToGroup() {
+    if (!activeConversation || !newMembers.length) return;
+
+    const nextMembers = Array.from(
+      new Set([...(activeConversation.members || []), ...newMembers])
+    );
+
+    await updateDoc(doc(db, "conversations", activeConversation.id), {
+      members: nextMembers,
+      updatedAt: serverTimestamp(),
+    });
+
+    setNewMembers([]);
+    setAddMembersMode(false);
+  }
+
+  async function handleLogout() {
+    if (!user) return;
+
+    await updateDoc(doc(db, "users", user.uid), {
+      online: false,
+      lastSeen: serverTimestamp(),
+    });
+
+    await signOut(auth);
+  }
+
+  const selectableMembers = users.filter(
+    (entry) => !activeConversation?.members?.includes(entry.id)
+  );
+
+  return (
+    <div className={`chat-shell ${darkMode ? "theme-dark" : ""}`}>
+      <aside className="sidebar">
+        <div className="sidebar__header">
+          <div>
+            <p className="eyebrow">Realtime workspace</p>
+            <h2>{profile?.fullName || "Chat App"}</h2>
+            <p className="sidebar__subtext">{profile?.email}</p>
+          </div>
           <button
-            onClick={addMembersToGroup}
-            style={{
-              marginTop: "10px",
-              padding: "6px 12px",
-              background: "#2563eb",
-              color: "#fff",
-              border: "none",
-              borderRadius: "4px",
-            }}
+            className="icon-button"
+            type="button"
+            onClick={() => setDarkMode((value) => !value)}
+            aria-label="Toggle theme"
           >
-            Add Selected
+            {darkMode ? "Light" : "Dark"}
           </button>
         </div>
-      )}
 
+        <div className="sidebar__search">
+          <input
+            type="text"
+            placeholder="Search people or chats"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+          />
+        </div>
 
+        <div className="sidebar__actions">
+          <button
+            type="button"
+            className={`secondary-button ${isGroupMode ? "is-active" : ""}`}
+            onClick={() => {
+              setIsGroupMode((value) => !value);
+              setSelectedUsers([]);
+              setGroupName("");
+            }}
+          >
+            {isGroupMode ? "Cancel group" : "New group"}
+          </button>
+          <button type="button" className="danger-button" onClick={handleLogout}>
+            Logout
+          </button>
+        </div>
 
-              
-          {/* Messages */}
-    <div
-      style={{
-        flex: 1,
-        padding: "15px",
-        overflowY: "auto",
-        background: darkMode ? "#020617" : "#f9fafb",
-
-      }}
-    >
-      {messages.map((m) => (
-        <div
-          key={m.id}
-          style={{
-            display: "flex",
-            justifyContent:
-              m.senderId === user.uid ? "flex-end" : "flex-start",
-            marginBottom: "8px",
-          }}
-        >
-          <div>
-            <span
-              style={{
-                maxWidth: "65%",
-                padding: "8px 12px",
-                borderRadius: "16px",
-               background: m.senderId === user.uid
-                              ? "#2563eb"
-                              : darkMode
-                              ? "#1f2937"
-                              : "#e5e7eb",
-                          color:
-                            m.senderId === user.uid
-                              ? "#fff"
-                              : darkMode
-                              ? "#f9fafb"
-                              : "#000",
-
-                fontSize: "14px",
-                lineHeight: "1.4",
-                wordBreak: "break-word",
-                display: "inline-block",
-              }}
-            >
-              {m.deleted ? (
-                <div style={{ fontStyle: "italic", opacity: 0.6 }}>
-                  This message was deleted
-                </div>
-              ) : editingMessageId === m.id ? (
-                <div>
+        {isGroupMode && (
+          <section className="panel">
+            <h3>Create group</h3>
+            <input
+              type="text"
+              placeholder="Group name"
+              value={groupName}
+              onChange={(event) => setGroupName(event.target.value)}
+            />
+            <div className="selection-list">
+              {availableUsers.map((entry) => (
+                <label key={entry.id} className="check-row">
                   <input
-                    value={editText}
-                    onChange={(e) => setEditText(e.target.value)}
-                    style={{
-                      width: "100%",
-                      fontSize: "13px",
-                      padding: "6px",
-                    }}
+                    type="checkbox"
+                    checked={selectedUsers.includes(entry.id)}
+                    onChange={(event) =>
+                      setSelectedUsers((current) =>
+                        event.target.checked
+                          ? [...current, entry.id]
+                          : current.filter((id) => id !== entry.id)
+                      )
+                    }
                   />
-                  <div style={{ marginTop: "4px" }}>
-                    <button
-                      onClick={saveEditedMessage}
-                      style={{
-                        fontSize: "10px",
-                        padding: "2px 6px",
-                        background: "#22c55e",
-                        color: "#fff",
-                        border: "none",
-                        borderRadius: "3px",
-                        cursor: "pointer",
-                      }}
-                    >
-                      Save
-                    </button>
+                  <span>{entry.fullName}</span>
+                </label>
+              ))}
+            </div>
+            <button type="button" onClick={createGroup}>
+              Create group
+            </button>
+          </section>
+        )}
 
-                    <button
-                      onClick={cancelEdit}
-                      style={{
-                        fontSize: "10px",
-                        padding: "2px 6px",
-                        background: "#9ca3af",
-                        color: "#fff",
-                        border: "none",
-                        borderRadius: "3px",
-                        cursor: "pointer",
-                        marginLeft: "6px",
-                      }}
-                    >
-                      Cancel
-                    </button>
+        <section className="sidebar__section">
+          <div className="section-heading">
+            <h3>Recent chats</h3>
+            <span>{recentConversations.length}</span>
+          </div>
+          <div className="conversation-list">
+            {recentConversations.length ? (
+              recentConversations.map((conversation) => (
+                <button
+                  key={conversation.id}
+                  type="button"
+                  className={`conversation-card ${
+                    activeConversationId === conversation.id ? "is-selected" : ""
+                  }`}
+                  onClick={() => {
+                    setActiveConversationId(conversation.id);
+                    setAddMembersMode(false);
+                  }}
+                >
+                  <div
+                    className={`avatar ${
+                      isConversationOnline(conversation, users, user.uid) ? "avatar--online" : ""
+                    }`}
+                  >
+                    {getInitials(getConversationTitle(conversation, users, user.uid))}
                   </div>
-                </div>
-              ) : (
-                <>
-                  {m.imageUrl && (
-                    <img
-                      src={m.imageUrl}
-                      alt="chat"
-                      style={{
-                        maxWidth: "200px",
-                        borderRadius: "10px",
-                        display: "block",
-                        marginBottom: "6px",
-                      }}
-                    />
-                  )}
-
-                  {m.text && <div>{m.text}</div>}
-
-                  {m.edited && (
-                    <div style={{ fontSize: "11px", opacity: 0.6 }}>
-                      (edited)
+                  <div className="conversation-card__body">
+                    <div className="conversation-card__top">
+                      <strong>
+                        {getConversationTitle(conversation, users, user.uid)}
+                      </strong>
+                      <span>{formatConversationTime(conversation.updatedAt)}</span>
                     </div>
-                  )}
-                </>
-              )}
-
-              <div
-                style={{
-                  fontSize: "10px",
-                  opacity: 0.6,
-                  marginTop: "4px",
-                  textAlign: "right",
-                }}
-              >
-                {formatTime(m.createdAt)}
-              </div>
-            </span>
-
-            {m.senderId === user.uid && !m.deleted && (
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "flex-end",
-                  gap: "6px",
-                  marginTop: "2px",
-                }}
-              >
-                <button
-                  onClick={() => softDeleteMessage(m.id)}
-                  style={{
-                    fontSize: "11px",
-                    background: "transparent",
-                    border: "none",
-                    color: "#ef4444",
-                    cursor: "pointer",
-                  }}
-                >
-                  Delete
+                    <p>
+                      {getConversationSubtitle(conversation, users, user.uid)}
+                    </p>
+                    <small>{getMessagePreview(conversation.lastMessage)}</small>
+                  </div>
                 </button>
-
-                <button
-                  onClick={() => startEditMessage(m)}
-                  style={{
-                    fontSize: "11px",
-                    background: "transparent",
-                    border: "none",
-                    color: "#2563eb",
-                    cursor: "pointer",
-                  }}
-                >
-                  Edit
-                </button>
-              </div>
+              ))
+            ) : (
+              <p className="empty-state">No active conversations yet.</p>
             )}
           </div>
-        </div>
-      ))}
-      <div ref={bottomRef} />
-    </div>
+        </section>
 
-
- {/* Input */}
-{activeChat && (
-  <div
-    style={{
-      padding: "12px",
-      borderTop: "1px solid #e5e7eb",
-      background: darkMode ? "#020617" : "#fff",
-      display: "flex",
-      flexDirection: "column",
-      gap: "8px",
-    }}
-  >
-    {/* IMAGE URL INPUT (DAY 8 FEATURE) */}
-    <input
-      type="text"
-      value={imageUrl}
-      onChange={(e) => setImageUrl(e.target.value)}
-      placeholder="Paste image URL (optional)"
-      style={{
-        width: "100%",
-        height: "38px",
-        padding: "0 12px",
-        fontSize: "13px",
-        borderRadius: "6px",
-        border: darkMode ? "1px solid #374151" : "1px solid #d1d5db",
-        background: darkMode ? "#020617" : "#fff",
-        color: darkMode ? "#f9fafb" : "#000",
-        outline: "none",
-      }}
-    />
-
-    {/* MESSAGE INPUT */}
-    <input
-      value={text}
-      onChange={(e) => setText(e.target.value)}
-      placeholder="Type a message..."
-      style={{
-        width: "100%",
-        height: "44px",
-        padding: "0 16px",
-        fontSize: "14px",
-        borderRadius: "8px",
-        border: darkMode ? "1px solid #374151" : "1px solid #d1d5db",
-        background: darkMode ? "#020617" : "#fff",
-        color: darkMode ? "#f9fafb" : "#000",
-        outline: "none",
-      }}
-    />
-
-    {/* SEND BUTTON */}
-    <button
-      onClick={sendMessage}
-      style={{
-        width: "100%",
-        height: "42px",
-        background: "#2563eb",
-        color: "#fff",
-        border: "none",
-        borderRadius: "8px",
-        fontSize: "14px",
-        cursor: "pointer",
-      }}
-    >
-      Send
-    </button>
-  </div>
-)}
-
-
-
-
-
-            </div>
+        <section className="sidebar__section">
+          <div className="section-heading">
+            <h3>Active now</h3>
+            <span>{activeUsers.length}</span>
           </div>
-        );
-      };
+          <div className="people-list">
+            {activeUsers.length ? (
+              activeUsers.map((entry) => (
+                <button
+                  key={entry.id}
+                  type="button"
+                  className="person-card"
+                  onClick={() => createOrOpenDirectConversation(entry)}
+                >
+                  <div className="avatar avatar--online">{getInitials(entry.fullName)}</div>
+                  <div className="person-card__body">
+                    <strong>{entry.fullName}</strong>
+                    <span>Active now</span>
+                  </div>
+                </button>
+              ))
+            ) : (
+              <p className="empty-state">No one is active right now.</p>
+            )}
+          </div>
+        </section>
 
-      export default Chat;
+        <section className="sidebar__section">
+          <div className="section-heading">
+            <h3>People</h3>
+            <span>{availableUsers.length}</span>
+          </div>
+          <div className="people-list">
+            {availableUsers.map((entry) => (
+              <button
+                key={entry.id}
+                type="button"
+                className="person-card"
+                onClick={() => createOrOpenDirectConversation(entry)}
+              >
+                <div className={`avatar ${entry.online ? "avatar--online" : ""}`}>
+                  {getInitials(entry.fullName)}
+                </div>
+                <div className="person-card__body">
+                  <strong>{entry.fullName}</strong>
+                  <span>{entry.online ? "Online" : formatLastSeen(entry.lastSeen)}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </section>
+      </aside>
+
+      <main className="chat-main">
+        {activeConversation ? (
+          <>
+            <header className="chat-header">
+              <div>
+                <p className="eyebrow">
+                  {activeConversation.isGroup ? "Group chat" : "Direct message"}
+                </p>
+                <h1>{getConversationTitle(activeConversation, users, user.uid)}</h1>
+                <p className="chat-header__status">
+                  {activeTypingUsers.length
+                    ? `${activeTypingUsers.join(", ")} typing...`
+                    : getConversationSubtitle(activeConversation, users, user.uid)}
+                </p>
+                {activeConversationUsers.length ? (
+                  <div className="active-strip">
+                    {activeConversationUsers.map((entry) => (
+                      <span
+                        key={entry.id}
+                        className={`active-pill ${entry.online ? "is-online" : ""}`}
+                      >
+                        {entry.fullName} {entry.online ? "active" : "offline"}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+              {activeConversation.isGroup && (
+                <button
+                  type="button"
+                  className={`secondary-button ${addMembersMode ? "is-active" : ""}`}
+                  onClick={() => setAddMembersMode((value) => !value)}
+                >
+                  {addMembersMode ? "Close members" : "Add members"}
+                </button>
+              )}
+            </header>
+
+            {addMembersMode && activeConversation.isGroup && (
+              <section className="panel panel--inline">
+                <h3>Add members</h3>
+                <div className="selection-list">
+                  {selectableMembers.length ? (
+                    selectableMembers.map((entry) => (
+                      <label key={entry.id} className="check-row">
+                        <input
+                          type="checkbox"
+                          checked={newMembers.includes(entry.id)}
+                          onChange={(event) =>
+                            setNewMembers((current) =>
+                              event.target.checked
+                                ? [...current, entry.id]
+                                : current.filter((id) => id !== entry.id)
+                            )
+                          }
+                        />
+                        <span>{entry.fullName}</span>
+                      </label>
+                    ))
+                  ) : (
+                    <p className="empty-state">Everyone is already in this group.</p>
+                  )}
+                </div>
+                <button type="button" onClick={addMembersToGroup}>
+                  Add selected members
+                </button>
+              </section>
+            )}
+
+            <section className="messages">
+              {messages.length ? (
+                messages.map((message) => (
+                  <article
+                    key={message.id}
+                    className={`message ${
+                      message.senderId === user.uid ? "message--own" : ""
+                    }`}
+                  >
+                    <div className="message__meta">
+                      <span>{message.senderId === user.uid ? "You" : message.senderName}</span>
+                      <time>{formatMessageTime(message.createdAt)}</time>
+                    </div>
+
+                    <div className="message__bubble">
+                      {message.deleted ? (
+                        <p className="message__deleted">This message was deleted.</p>
+                      ) : editingMessageId === message.id ? (
+                        <div className="message__editor">
+                          <input
+                            type="text"
+                            value={editText}
+                            onChange={(event) => setEditText(event.target.value)}
+                          />
+                          <div className="message__editor-actions">
+                            <button type="button" onClick={saveEditedMessage}>
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              className="secondary-button"
+                              onClick={cancelEdit}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          {message.imageUrl && (
+                            <img
+                              src={message.imageUrl}
+                              alt="Shared attachment"
+                              className="message__image"
+                            />
+                          )}
+                          {message.text ? <p>{message.text}</p> : null}
+                          {message.edited ? <small>(edited)</small> : null}
+                        </>
+                      )}
+                    </div>
+
+                    {message.senderId === user.uid && !message.deleted ? (
+                      <div className="message__actions">
+                        <button type="button" onClick={() => startEditMessage(message)}>
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="danger-text"
+                          onClick={() => softDeleteMessage(message.id)}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    ) : null}
+                  </article>
+                ))
+              ) : (
+                <div className="messages__empty">
+                  <h3>Start the conversation</h3>
+                  <p>Send the first message to make this thread active in real time.</p>
+                </div>
+              )}
+              <div ref={bottomRef} />
+            </section>
+
+            <footer className="composer">
+              <input
+                type="text"
+                placeholder="Paste an image URL (optional)"
+                value={imageUrl}
+                onChange={(event) => setImageUrl(event.target.value)}
+              />
+              <div className="composer__row">
+                <input
+                  type="text"
+                  placeholder="Type a message"
+                  value={text}
+                  onChange={(event) => setText(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      sendMessage();
+                    }
+                  }}
+                />
+                <button type="button" onClick={sendMessage}>
+                  Send
+                </button>
+              </div>
+            </footer>
+          </>
+        ) : (
+          <section className="chat-empty">
+            <p className="eyebrow">Realtime chat</p>
+            <h1>Pick a person or create a group.</h1>
+            <p>
+              Conversations update live through Firestore snapshots, including member
+              status, typing state, and latest message previews.
+            </p>
+          </section>
+        )}
+      </main>
+    </div>
+  );
+};
+
+function getConversationTitle(conversation, users, currentUserId) {
+  if (conversation.isGroup) {
+    return conversation.name || "Untitled group";
+  }
+
+  const otherUserId = conversation.members?.find((member) => member !== currentUserId);
+  return (
+    users.find((entry) => entry.id === otherUserId)?.fullName ||
+    conversation.directParticipantNames?.[otherUserId] ||
+    "Direct chat"
+  );
+}
+
+function getConversationSubtitle(conversation, users, currentUserId) {
+  if (conversation.isGroup) {
+    return `${conversation.members?.length || 0} members`;
+  }
+
+  const otherUserId = conversation.members?.find((member) => member !== currentUserId);
+  const otherUser = users.find((entry) => entry.id === otherUserId);
+
+  if (!otherUser) return "Direct chat";
+  return otherUser.online ? "Online now" : formatLastSeen(otherUser.lastSeen);
+}
+
+function isConversationOnline(conversation, users, currentUserId) {
+  if (conversation.isGroup) {
+    return conversation.members?.some((memberId) => {
+      if (memberId === currentUserId) return false;
+      return users.find((entry) => entry.id === memberId)?.online;
+    });
+  }
+
+  const otherUserId = conversation.members?.find((member) => member !== currentUserId);
+  return Boolean(users.find((entry) => entry.id === otherUserId)?.online);
+}
+
+export default Chat;

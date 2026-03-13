@@ -1,11 +1,8 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth, db } from "../services/firebase";
-import { doc, updateDoc,setDoc, serverTimestamp } from "firebase/firestore";
-
-
-
-const AuthContext = createContext();
+import { doc, updateDoc, setDoc, serverTimestamp } from "firebase/firestore";
+import { AuthContext } from "./auth-context";
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
@@ -14,15 +11,17 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
-        // set online
-            await setDoc(
-        doc(db, "users", currentUser.uid),
-        {
-          online: true,
-          lastSeen: serverTimestamp(),
-        },
-        { merge: true }
-      );
+        await setDoc(
+          doc(db, "users", currentUser.uid),
+          {
+            email: currentUser.email || "",
+            displayName: currentUser.displayName || "",
+            emailVerified: currentUser.emailVerified,
+            online: true,
+            lastSeen: serverTimestamp(),
+          },
+          { merge: true }
+        );
 
         setUser(currentUser);
       } else {
@@ -36,27 +35,35 @@ export const AuthProvider = ({ children }) => {
 
   // Handle tab close / refresh
   useEffect(() => {
+    const setPresence = async (online) => {
+      if (!auth.currentUser) return;
+
+      await updateDoc(doc(db, "users", auth.currentUser.uid), {
+        online,
+        lastSeen: serverTimestamp(),
+      });
+    };
+
     const handleOffline = async () => {
-      if (auth.currentUser) {
-        await updateDoc(doc(db, "users", auth.currentUser.uid), {
-          online: false,
-          lastSeen: serverTimestamp(),
-        });
-      }
+      await setPresence(false);
+    };
+
+    const handleVisibilityChange = async () => {
+      await setPresence(!document.hidden);
     };
 
     window.addEventListener("beforeunload", handleOffline);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       window.removeEventListener("beforeunload", handleOffline);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user }}>
-      {!loading && children}
+    <AuthContext.Provider value={{ user, loading }}>
+      {loading ? <div className="auth-loading">Checking session...</div> : children}
     </AuthContext.Provider>
   );
 };
-
-export const useAuth = () => useContext(AuthContext);
